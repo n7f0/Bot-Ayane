@@ -16,19 +16,28 @@ logging.getLogger("discord.voice_state").setLevel(logging.WARNING)
 
 # ===================== CONFIG PADRÃO =====================
 DEFAULT_CONFIG = {
-    "brand_name": "𝚙𝚡𝚔",
-    "brand_emoji": "🖤",
-    "brand_footer": "🖤 𝚙𝚡𝚔 • Sistema Oficial",
-    "brand_color_primary": 0x8A2BE2,
-    "brand_color_secondary": 0xB026FF,
-    "brand_color_success": 0x00FF88,
-    "brand_color_danger": 0xFF3366,
+    # ---------- MARCA (Ayane) ----------
+    "brand_name": "Ayane",
+    "brand_emoji": "🌸",
+    "brand_footer": "🌸 Ayane • Sistema Oficial",
+    "brand_color_primary":   0xFF69B4,   # Hot Pink
+    "brand_color_secondary": 0xDA70D6,   # Orchid
+    "brand_color_success":   0x00FF88,
+    "brand_color_danger":    0xFF3366,
     "avatar_url": "",
     "_last_avatar_url": "",
     "banner_painel_url": "",
     "banner_ticket_url": "",
     "banner_welcome_url": "",
     "guild_id": None,
+
+    # ---------- AUTO BUMP ----------
+    "bump_enabled": False,
+    "bump_channel_id": None,
+    "bump_message": "!d bump",
+    "bump_interval_minutes": 120,   # 2 horas
+    "bump_last_run": None,
+    "bump_count": 0,
 
     "verification_method": "math",
     "verification_difficulty": 1,
@@ -66,14 +75,13 @@ DEFAULT_CONFIG = {
     "ticket_panel_message_id": None,
     "ticket_support_role_ids": [],
 
-    # ✅ NOVOS CAMPOS EDITÁVEIS DO PAINEL DE TICKETS
     "ticket_panel_title": "🎫 Central de Tickets — {brand}",
     "ticket_panel_description": (
         "### 💬 Precisa de ajuda ou quer comprar algo?\n"
         "Escolha o tipo de atendimento no **menu abaixo** para abrir um ticket privado com nossa equipe.\n\n"
         "**❓ Dúvidas** — suporte geral, ajuda, perguntas\n"
         "**🛒 Compras** — produtos, serviços e pagamentos\n\n"
-        "-# Nossa equipe responderá o mais rápido possível 🖤"
+        "-# Nossa equipe responderá o mais rápido possível 🌸"
     ),
     "ticket_panel_select_placeholder": "🎫 Selecione o tipo de ticket para abrir...",
     "ticket_doubt_label": "Dúvidas",
@@ -126,11 +134,11 @@ def save_config(data):
 config = load_config()
 
 # ===================== HELPERS DE IDENTIDADE =====================
-def bname():  return config.get("brand_name") or "Bot"
-def bemoji(): return config.get("brand_emoji") or "🖤"
+def bname():  return config.get("brand_name") or "Ayane"
+def bemoji(): return config.get("brand_emoji") or "🌸"
 def bfooter(): return config.get("brand_footer") or "Sistema Oficial"
-def color_primary():   return config.get("brand_color_primary", 0x8A2BE2)
-def color_secondary(): return config.get("brand_color_secondary", 0xB026FF)
+def color_primary():   return config.get("brand_color_primary", 0xFF69B4)
+def color_secondary(): return config.get("brand_color_secondary", 0xDA70D6)
 def color_success():   return config.get("brand_color_success", 0x00FF88)
 def color_danger():    return config.get("brand_color_danger", 0xFF3366)
 def avatar_url():      return config.get("avatar_url") or None
@@ -139,7 +147,6 @@ def banner_ticket():   return config.get("banner_ticket_url") or None
 def banner_welcome():  return config.get("welcome_image_url") or config.get("banner_welcome_url") or None
 
 def _fmt_text(t: str) -> str:
-    """Substitui placeholders dinâmicos no texto."""
     if not t: return ""
     guild = get_guild()
     members = guild.member_count if guild else 0
@@ -591,7 +598,6 @@ async def handle_antibot_punish(message: discord.Message):
 
 # ===================== TICKET PANEL — REFRESH =====================
 async def refresh_ticket_panel():
-    """Reenvia/edita o painel de tickets com as configs atuais."""
     cid = config.get("ticket_panel_channel_id")
     if not cid: return False
     guild = get_guild()
@@ -608,7 +614,6 @@ async def refresh_ticket_panel():
         except Exception as e:
             logger.debug(f"Não consegui editar painel existente: {e}")
 
-    # Se não existir, manda um novo
     try:
         msg = await ch.send(view=ticket_panel_layout())
         config["ticket_panel_message_id"] = msg.id
@@ -617,6 +622,71 @@ async def refresh_ticket_panel():
     except Exception as e:
         logger.error(f"Erro enviando painel de tickets: {e}")
         return False
+
+# ===================== AUTO BUMP =====================
+async def do_bump():
+    """Envia a mensagem de bump no canal configurado."""
+    cid = config.get("bump_channel_id")
+    if not cid: return False, "Canal não configurado."
+    guild = get_guild()
+    if not guild: return False, "Guild não encontrada."
+    ch = guild.get_channel(cid)
+    if not ch: return False, "Canal inválido."
+
+    msg_txt = config.get("bump_message") or "!d bump"
+    try:
+        await ch.send(msg_txt)
+    except Exception as e:
+        return False, f"Erro: {e}"
+
+    config["bump_last_run"] = datetime.datetime.now().isoformat()
+    config["bump_count"] = int(config.get("bump_count", 0)) + 1
+    save_config(config)
+    return True, "Bump enviado!"
+
+async def bump_panel_view():
+    enabled = config.get("bump_enabled", False)
+    ch_id = config.get("bump_channel_id")
+    ch_str = f"<#{ch_id}>" if ch_id else "`— não definido —`"
+    interval = config.get("bump_interval_minutes", 120)
+    msg_txt = config.get("bump_message") or "!d bump"
+    last = config.get("bump_last_run")
+    count = config.get("bump_count", 0)
+
+    if last:
+        try:
+            last_dt = datetime.datetime.fromisoformat(last)
+            last_str = f"<t:{int(last_dt.timestamp())}:R>"
+        except Exception:
+            last_str = "`—`"
+    else:
+        last_str = "`nunca`"
+
+    return premium_submenu(
+        "🔔 Auto Bump",
+        "Configure o **bump automático** do servidor.\n\n"
+        f"**Status:** `{'✅ Ativado' if enabled else '❌ Desativado'}`\n"
+        f"**Canal:** {ch_str}\n"
+        f"**Intervalo:** `{interval} min` ({interval//60}h {interval%60:02d}m)\n"
+        f"**Mensagem enviada:** `{msg_txt}`\n"
+        f"**Último bump:** {last_str}\n"
+        f"**Total de bumps:** `{count}`",
+        [
+            {"title": "📢 Configuração", "rows": [
+                [_btn("Definir Canal de Bump", "bp_ch",   P, "📢")],
+                [_btn("Mensagem de Bump",      "bp_msg",  P, "✏️")],
+                [_btn("Intervalo (min)",       "bp_time", P, "⏰")],
+            ]},
+            {"title": "⚙️ Controle", "rows": [
+                [_btn(f"{'Desativar' if enabled else 'Ativar'} Auto Bump",
+                       "bp_toggle",
+                       D if enabled else SU,
+                       "⏸️" if enabled else "▶️")],
+                [_btn("🔔 Bump Agora", "bp_now", SU, "🚀")],
+            ]},
+        ],
+        accent=color_primary(),
+    )
 
 # ===================== PAINEL PRINCIPAL =====================
 def painel_layout():
@@ -636,10 +706,12 @@ def painel_layout():
     layout.add_item(ui.Container(*header, accent_color=color_primary()))
 
     select = _safe_select(
-        placeholder="🖤 Escolha uma categoria para configurar...",
+        placeholder="🌸 Escolha uma categoria para configurar...",
         options=[
             discord.SelectOption(label="Identidade Visual", value="identity", emoji="🎨",
                                  description="Nome, emoji, cores e banners"),
+            discord.SelectOption(label="Auto Bump", value="bump", emoji="🔔",
+                                 description="Bump automático a cada X minutos"),
             discord.SelectOption(label="Anti-Bot", value="antibot", emoji="🚫",
                                  description="Canal protegido e punições automáticas"),
             discord.SelectOption(label="Verificação Captcha", value="captcha", emoji="✅",
@@ -683,6 +755,7 @@ async def main_menu_callback(interaction: discord.Interaction):
     v = interaction.data["values"][0]
     routes = {
         "identity":     lambda: interaction.response.send_message(view=identity_view(), ephemeral=True),
+        "bump":         lambda: interaction.response.send_message(view=bump_panel_view(), ephemeral=True),
         "antibot":      lambda: interaction.response.send_message(view=antibot_view(), ephemeral=True),
         "captcha":      lambda: interaction.response.send_message(view=captcha_view(), ephemeral=True),
         "welcome":      lambda: interaction.response.send_message(view=welcome_view(), ephemeral=True),
@@ -711,7 +784,7 @@ def identity_view():
                 _btn("Rodapé", "id_footer", P, "📝"),
             ]]},
             {"title": "🎨 Paleta de Cores", "rows": [[
-                _btn("Primária",   "id_c1", P,  "🟣"),
+                _btn("Primária",   "id_c1", P,  "🌸"),
                 _btn("Secundária", "id_c2", P,  "💜"),
                 _btn("Sucesso",    "id_c3", SU, "🟢"),
                 _btn("Perigo",     "id_c4", D,  "🔴"),
@@ -925,7 +998,6 @@ def tickets_view():
         accent=color_primary(),
     )
 
-# ✅ SUBMENU: PERSONALIZAR PAINEL DE TICKETS
 def ticket_panel_custom_view():
     t_title = config.get("ticket_panel_title") or ""
     t_ph    = config.get("ticket_panel_select_placeholder") or ""
@@ -1210,11 +1282,22 @@ def show_config_view():
     diff_labels = {1: "Fácil", 2: "Médio", 3: "Difícil"}
     kick = config.get("verification_kick_minutes", 0)
 
+    bump_on = config.get("bump_enabled", False)
+    bump_ch = ch("bump_channel_id")
+    bump_int = config.get("bump_interval_minutes", 120)
+
     lines = [
         f"### 🏷️ Marca",
         f"**Nome:** {bname()} {bemoji()}",
         f"**Guild ID:** `{config.get('guild_id')}`",
         f"**Admin Roles:** {role_list('admin_role_ids')}",
+        "",
+        f"### 🔔 Auto Bump",
+        f"**Ativado:** `{'Sim' if bump_on else 'Não'}`",
+        f"**Canal:** {bump_ch}",
+        f"**Intervalo:** `{bump_int} min`",
+        f"**Mensagem:** `{config.get('bump_message')}`",
+        f"**Total bumps:** `{config.get('bump_count', 0)}`",
         "",
         f"### 🚫 Anti-Bot",
         f"**Canal:** {ch('antibot_channel_id')}",
@@ -1469,7 +1552,7 @@ def verification_panel_layout():
                 "**Como funciona:**\n"
                 "> • Clique no botão **✅ Verificar Agora**\n"
                 "> • Resolva o desafio que aparecer\n"
-                "> • Pronto! Você receberá os cargos automaticamente 🖤"
+                "> • Pronto! Você receberá os cargos automaticamente 🌸"
             ),
             accessory=ui.Thumbnail(media=_thumb()),
         ),
@@ -1491,8 +1574,6 @@ def verification_panel_layout():
 
 
 def ticket_panel_layout():
-    """Painel público de tickets — TOTALMENTE editável pelo admin."""
-    # Pega textos configurados
     raw_title = config.get("ticket_panel_title") or "🎫 Central de Tickets — {brand}"
     raw_desc  = config.get("ticket_panel_description") or ""
     raw_ph    = config.get("ticket_panel_select_placeholder") or "🎫 Selecione o tipo de ticket..."
@@ -1505,7 +1586,6 @@ def ticket_panel_layout():
     p_desc  = config.get("ticket_purchase_desc") or ""
     p_emoji = config.get("ticket_purchase_emoji") or "🛒"
 
-    # Substitui placeholders
     title = _fmt_text(raw_title)
     desc  = _fmt_text(raw_desc)
     ph    = _fmt_text(raw_ph)
@@ -1528,7 +1608,6 @@ def ticket_panel_layout():
         if mg is not None:
             comps.append(mg)
 
-    # Select com labels/descrições/emojis configuráveis
     ticket_sel = _safe_select(
         placeholder=ph,
         options=[
@@ -1638,6 +1717,30 @@ async def on_interaction(interaction: discord.Interaction):
             await interaction.followup.send("✅ Avatar aplicado!" if ok else "❌ Falha ao aplicar avatar.", ephemeral=True)
         elif cid == "id_preview":
             await interaction.response.send_message(view=painel_layout(), ephemeral=True)
+
+        # ---------- AUTO BUMP ----------
+        elif cid == "bp_ch":
+            await interaction.response.send_message(view=single_channel_view("bump_channel_id", "Canal do Auto Bump"), ephemeral=True)
+        elif cid == "bp_msg":
+            await interaction.response.send_modal(GenericTextModal(
+                "bump_message", "✏️ Mensagem de Bump",
+                "Mensagem enviada no canal (ex: !d bump)",
+                default=config.get("bump_message") or "!d bump",
+                max_length=200, refresh=None
+            ))
+        elif cid == "bp_time":
+            await interaction.response.send_modal(BumpIntervalModal())
+        elif cid == "bp_toggle":
+            config["bump_enabled"] = not config.get("bump_enabled", False)
+            save_config(config)
+            await interaction.response.send_message(
+                f"✅ Auto Bump **{'ativado' if config['bump_enabled'] else 'desativado'}**.",
+                ephemeral=True
+            )
+        elif cid == "bp_now":
+            await interaction.response.defer(ephemeral=True)
+            ok, msg = await do_bump()
+            await interaction.followup.send(("✅ " if ok else "❌ ") + msg, ephemeral=True)
 
         # ---------- ANTI-BOT ----------
         elif cid == "ab_ch":
@@ -1931,7 +2034,7 @@ class ColorModal(ui.Modal):
     def __init__(self, key, label):
         super().__init__(title=f"🎨 {label}")
         self.key = key
-        self.v = ui.TextInput(label="HEX (ex: 8A2BE2)", required=True, min_length=6, max_length=7)
+        self.v = ui.TextInput(label="HEX (ex: FF69B4)", required=True, min_length=6, max_length=7)
         self.add_item(self.v)
     async def on_submit(self, interaction):
         raw = self.v.value.strip().replace("#", "")
@@ -1945,7 +2048,7 @@ class URLModal(ui.Modal):
     def __init__(self, key, label, refresh=None):
         super().__init__(title=f"🖼️ {label}")
         self.key = key
-        self.refresh = refresh  # "antibot", "ticket" ou None
+        self.refresh = refresh
         self.v = ui.TextInput(label="URL (ou 'limpar')", required=True)
         self.add_item(self.v)
     async def on_submit(self, interaction):
@@ -1969,7 +2072,6 @@ class URLModal(ui.Modal):
             except Exception: pass
 
 class GenericTextModal(ui.Modal):
-    """Modal genérico para editar qualquer campo de texto do config."""
     def __init__(self, key, title, label, default="", style=discord.TextStyle.short,
                  max_length=200, refresh=None):
         super().__init__(title=title[:45])
@@ -1989,7 +2091,6 @@ class GenericTextModal(ui.Modal):
         config[self.key] = val
         save_config(config)
 
-        # Refresh do painel afetado
         if self.refresh == "antibot":
             try: await refresh_antibot_panel()
             except Exception: pass
@@ -1998,6 +2099,26 @@ class GenericTextModal(ui.Modal):
             except Exception: pass
 
         await interaction.response.send_message(f"✅ Atualizado!", ephemeral=True)
+
+class BumpIntervalModal(ui.Modal, title="⏰ Intervalo do Auto Bump"):
+    def __init__(self):
+        super().__init__()
+        cur = config.get("bump_interval_minutes", 120)
+        self.v = ui.TextInput(
+            label="Minutos entre bumps (padrão: 120)",
+            default=str(cur),
+            required=True, min_length=1, max_length=5
+        )
+        self.add_item(self.v)
+    async def on_submit(self, interaction):
+        try:
+            val = int(self.v.value.strip())
+            if val < 5: raise ValueError("Mínimo 5 minutos")
+        except ValueError:
+            await interaction.response.send_message("❌ Número inválido. Mínimo 5 minutos.", ephemeral=True); return
+        config["bump_interval_minutes"] = val
+        save_config(config)
+        await interaction.response.send_message(f"✅ Intervalo definido: **{val} minutos** ({val//60}h {val%60:02d}m).", ephemeral=True)
 
 class AntibotTitleModal(ui.Modal, title="✏️ Título do Painel AntiBot"):
     v = ui.TextInput(
@@ -2405,7 +2526,7 @@ async def handle_captcha_start(interaction):
 async def handle_button_verify(interaction):
     member = interaction.user
     await _grant_verification(interaction.guild, member)
-    await interaction.response.send_message("✅ **Verificado!** Bem-vindo(a)! 🖤", ephemeral=True)
+    await interaction.response.send_message("✅ **Verificado!** Bem-vindo(a)! 🌸", ephemeral=True)
 
 class CaptchaModal(ui.Modal, title="🧮 Verificação"):
     def __init__(self, guild_id, user_id):
@@ -2438,7 +2559,7 @@ class CaptchaModal(ui.Modal, title="🧮 Verificação"):
 
         if val == expected:
             await _grant_verification(guild, member)
-            await interaction.response.send_message("✅ **Verificado com sucesso!** 🖤", ephemeral=True)
+            await interaction.response.send_message("✅ **Verificado com sucesso!** 🌸", ephemeral=True)
         else:
             await _log_verification(guild, member, False, "errou o desafio")
             await interaction.response.send_message("❌ Resposta incorreta. Tente novamente.", ephemeral=True)
@@ -2448,7 +2569,7 @@ class CaptchaModal(ui.Modal, title="🧮 Verificação"):
                 await send_captcha_challenge(member, ch)
 
 # ===================== COMANDOS =====================
-@bot.tree.command(name="painelpxkadmin", description="🖤 Painel administrativo do servidor")
+@bot.tree.command(name="painelpxkadmin", description="🌸 Painel administrativo do servidor")
 @app_commands.default_permissions(administrator=True)
 async def cmd_painel(interaction: discord.Interaction):
     cid = config.get("painel_channel_id")
@@ -2577,186 +2698,4 @@ async def cmd_mutar(interaction):
     except Exception as e:
         await interaction.response.send_message(f"❌ {e}", ephemeral=True)
 
-@bot.tree.command(name="desmutar", description="🔊 Desmuta o bot na call")
-async def cmd_desmutar(interaction):
-    guild = interaction.guild
-    vc = guild.voice_client if guild else None
-    if not vc or not vc.is_connected():
-        await interaction.response.send_message("❌ Bot não está em call.", ephemeral=True); return
-    try:
-        await guild.me.edit(mute=False)
-        config["voice_mute"] = False; save_config(config)
-        await interaction.response.send_message("🔊 Desmutado.", ephemeral=True)
-    except Exception as e:
-        await interaction.response.send_message(f"❌ {e}", ephemeral=True)
-
-@bot.tree.command(name="status", description="🎭 Altera o status do bot")
-async def cmd_status(interaction, modo: str):
-    if modo.lower() not in ["online", "idle", "dnd", "invisible"]:
-        await interaction.response.send_message("❌ Use: online, idle, dnd, invisible", ephemeral=True); return
-    config["bot_status"] = modo.lower(); save_config(config)
-    await update_status()
-    await interaction.response.send_message(f"✅ Status: **{modo}**", ephemeral=True)
-
-# ===================== TASKS =====================
-@tasks.loop(minutes=1)
-async def task_voice(): await update_voice_name_impl()
-
-@tasks.loop(minutes=5)
-async def task_status(): await update_status()
-
-@tasks.loop(minutes=2)
-async def task_voice_watchdog():
-    guild = get_guild()
-    if not guild: return
-    cid = config.get("voice_channel_id")
-    if not cid: return
-    ch = guild.get_channel(cid)
-    if not ch or not isinstance(ch, discord.VoiceChannel): return
-    vc = guild.voice_client
-    if vc and vc.is_connected():
-        return
-    try:
-        if not vc:
-            await ch.connect(timeout=15.0, reconnect=True)
-        else:
-            await vc.move_to(ch)
-        await update_voice_mute()
-    except Exception as e:
-        logger.debug(f"Voice watchdog: {e}")
-
-@tasks.loop(minutes=2)
-async def task_antibot_refresh():
-    try:
-        await refresh_antibot_panel()
-    except Exception as e:
-        logger.debug(f"Antibot refresh: {e}")
-
-# ===================== AUX =====================
-async def bot_join_voice():
-    guild = get_guild()
-    if not guild: return
-    cid = config.get("voice_channel_id")
-    if not cid: return
-    ch = guild.get_channel(cid)
-    if not ch or not isinstance(ch, discord.VoiceChannel): return
-    try:
-        if not guild.voice_client:
-            await ch.connect(timeout=15.0, reconnect=True)
-        else:
-            await guild.voice_client.move_to(ch)
-        await update_voice_name_impl()
-        await update_voice_mute()
-    except Exception as e:
-        logger.warning(f"Voz: {e}")
-
-async def apply_avatar_if_needed(force=False):
-    url = avatar_url()
-    if not url: return False
-    if not force and config.get("_last_avatar_url") == url: return True
-    try:
-        async with aiohttp.ClientSession() as s:
-            async with s.get(url) as r:
-                if r.status != 200: return False
-                data = await r.read()
-        await bot.user.edit(avatar=data)
-        config["_last_avatar_url"] = url; save_config(config)
-        return True
-    except Exception as e:
-        logger.warning(f"Avatar: {e}"); return False
-
-# ===================== EVENTOS =====================
-@bot.event
-async def on_ready():
-    logger.info(f"{bemoji()} {bname()} conectado como {bot.user}")
-    try: init_db()
-    except Exception as e: logger.error(f"DB: {e}")
-    if not config.get("guild_id") and bot.guilds:
-        config["guild_id"] = bot.guilds[0].id; save_config(config)
-    try:
-        await bot.tree.sync()
-        logger.info("✅ Comandos sincronizados")
-    except Exception as e: logger.error(f"Sync: {e}")
-    await apply_avatar_if_needed()
-    await bot_join_voice()
-    await update_status()
-    for t in (task_voice, task_status, task_voice_watchdog, task_antibot_refresh):
-        if not t.is_running(): t.start()
-    try:
-        await refresh_antibot_panel()
-    except Exception:
-        pass
-
-@bot.event
-async def on_message(message: discord.Message):
-    if message.author.bot: return
-    if not message.guild: return
-
-    ab_cid = config.get("antibot_channel_id")
-    if ab_cid and message.channel.id == ab_cid:
-        await handle_antibot_punish(message)
-        return
-
-    await bot.process_commands(message)
-
-@bot.event
-async def on_member_join(member):
-    if member.bot: return
-    guild = member.guild
-
-    try:
-        await send_welcome_message(member)
-    except Exception as e:
-        logger.error(f"Erro send_welcome: {e}")
-
-    for rid in config.get("verification_unverified_role_ids", []):
-        r = guild.get_role(rid)
-        if r:
-            try: await member.add_roles(r)
-            except Exception: pass
-
-    ch_id = config.get("verification_channel_id")
-    if ch_id:
-        ch = guild.get_channel(ch_id)
-        if ch:
-            try:
-                await send_captcha_challenge(member, ch)
-            except Exception as e:
-                logger.error(f"Erro enviando desafio: {e}")
-
-    schedule_verification_kick(guild, member)
-    await update_voice_name_impl()
-    await update_status()
-
-@bot.event
-async def on_member_remove(member):
-    if member.bot: return
-    try:
-        await send_leave_message(member)
-    except Exception as e:
-        logger.error(f"Erro send_leave: {e}")
-    cancel_verification_kick(member.guild.id, member.id)
-    await update_voice_name_impl()
-    await update_status()
-
-@bot.event
-async def on_voice_state_update(member, before, after):
-    if member.bot: return
-    if before.channel is None and after.channel is not None:
-        try:
-            await send_voice_log(member, after.channel, "join")
-        except Exception as e:
-            logger.error(f"Erro voice join: {e}")
-    elif before.channel is not None and after.channel is None:
-        try:
-            await send_voice_log(member, before.channel, "leave")
-        except Exception as e:
-            logger.error(f"Erro voice leave: {e}")
-
-@bot.event
-async def on_guild_join(guild):
-    config["guild_id"] = guild.id; save_config(config)
-
-# ===================== EXECUÇÃO =====================
-if __name__ == "__main__":
-    bot.run(TOKEN)
+@bot.tree.command(name="desmutar", description="🔊 Desmuta o bot na
