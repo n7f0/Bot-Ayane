@@ -2698,4 +2698,251 @@ async def cmd_mutar(interaction):
     except Exception as e:
         await interaction.response.send_message(f"❌ {e}", ephemeral=True)
 
-@bot.tree.command(name="desmutar", description="🔊 Desmuta o bot na
+@bot.tree.command(name="desmutar", description="🔊 Desmuta o bot na call")
+async def cmd_desmutar(interaction):
+    guild = interaction.guild
+    vc = guild.voice_client if guild else None
+    if not vc or not vc.is_connected():
+        await interaction.response.send_message("❌ Bot não está em call.", ephemeral=True); return
+    try:
+        await guild.me.edit(mute=False)
+        config["voice_mute"] = False; save_config(config)
+        await interaction.response.send_message("🔊 Desmutado.", ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(f"❌ {e}", ephemeral=True)
+
+@bot.tree.command(name="status", description="🎭 Altera o status do bot")
+async def cmd_status(interaction, modo: str):
+    if modo.lower() not in ["online", "idle", "dnd", "invisible"]:
+        await interaction.response.send_message("❌ Use: online, idle, dnd, invisible", ephemeral=True); return
+    config["bot_status"] = modo.lower(); save_config(config)
+    await update_status()
+    await interaction.response.send_message(f"✅ Status: **{modo}**", ephemeral=True)
+
+# ---------- Comando /bump (manual + info) ----------
+@bot.tree.command(name="bump", description="🔔 Envia o bump manualmente no canal configurado")
+@app_commands.default_permissions(administrator=True)
+async def cmd_bump(interaction: discord.Interaction):
+    ok, msg = await do_bump()
+    if ok:
+        await interaction.response.send_message(f"✅ {msg} (total: `{config.get('bump_count', 0)}`)", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"❌ {msg}\n-# Configure em **Painel → 🔔 Auto Bump**.", ephemeral=True)
+
+@bot.tree.command(name="bumpinfo", description="ℹ️ Mostra o status do Auto Bump")
+async def cmd_bumpinfo(interaction: discord.Interaction):
+    enabled = config.get("bump_enabled", False)
+    ch_id = config.get("bump_channel_id")
+    ch_str = f"<#{ch_id}>" if ch_id else "`não definido`"
+    interval = config.get("bump_interval_minutes", 120)
+    msg_txt = config.get("bump_message") or "!d bump"
+    count = config.get("bump_count", 0)
+    last = config.get("bump_last_run")
+    if last:
+        try:
+            last_str = f"<t:{int(datetime.datetime.fromisoformat(last).timestamp())}:R>"
+        except Exception:
+            last_str = "`—`"
+    else:
+        last_str = "`nunca`"
+
+    e = discord.Embed(title=f"🔔 Auto Bump — {bname()}", color=color_primary())
+    e.add_field(name="Status", value="✅ Ativado" if enabled else "❌ Desativado", inline=True)
+    e.add_field(name="Canal", value=ch_str, inline=True)
+    e.add_field(name="Intervalo", value=f"`{interval} min`", inline=True)
+    e.add_field(name="Mensagem", value=f"`{msg_txt}`", inline=False)
+    e.add_field(name="Último bump", value=last_str, inline=True)
+    e.add_field(name="Total de bumps", value=f"`{count}`", inline=True)
+    e.set_footer(text=bfooter())
+    await interaction.response.send_message(embed=e, ephemeral=True)
+
+# ===================== TASKS =====================
+@tasks.loop(minutes=1)
+async def task_voice(): await update_voice_name_impl()
+
+@tasks.loop(minutes=5)
+async def task_status(): await update_status()
+
+@tasks.loop(minutes=2)
+async def task_voice_watchdog():
+    guild = get_guild()
+    if not guild: return
+    cid = config.get("voice_channel_id")
+    if not cid: return
+    ch = guild.get_channel(cid)
+    if not ch or not isinstance(ch, discord.VoiceChannel): return
+    vc = guild.voice_client
+    if vc and vc.is_connected():
+        return
+    try:
+        if not vc:
+            await ch.connect(timeout=15.0, reconnect=True)
+        else:
+            await vc.move_to(ch)
+        await update_voice_mute()
+    except Exception as e:
+        logger.debug(f"Voice watchdog: {e}")
+
+@tasks.loop(minutes=2)
+async def task_antibot_refresh():
+    try:
+        await refresh_antibot_panel()
+    except Exception as e:
+        logger.debug(f"Antibot refresh: {e}")
+
+# ---------- AUTO BUMP TASK ----------
+@tasks.loop(minutes=1)
+async def task_auto_bump():
+    """Roda a cada minuto e verifica se já é hora de dar bump."""
+    if not config.get("bump_enabled", False):
+        return
+    if not config.get("bump_channel_id"):
+        return
+
+    interval_min = int(config.get("bump_interval_minutes", 120) or 120)
+    last = config.get("bump_last_run")
+    now = datetime.datetime.now()
+
+    if last:
+        try:
+            last_dt = datetime.datetime.fromisoformat(last)
+            diff = (now - last_dt).total_seconds() / 60.0
+            if diff < interval_min:
+                return
+        except Exception:
+            pass
+
+    ok, msg = await do_bump()
+    if ok:
+        logger.info(f"🔔 Auto Bump executado: {msg}")
+    else:
+        logger.warning(f"Auto Bump falhou: {msg}")
+
+# ===================== AUX =====================
+async def bot_join_voice():
+    guild = get_guild()
+    if not guild: return
+    cid = config.get("voice_channel_id")
+    if not cid: return
+    ch = guild.get_channel(cid)
+    if not ch or not isinstance(ch, discord.VoiceChannel): return
+    try:
+        if not guild.voice_client:
+            await ch.connect(timeout=15.0, reconnect=True)
+        else:
+            await guild.voice_client.move_to(ch)
+        await update_voice_name_impl()
+        await update_voice_mute()
+    except Exception as e:
+        logger.warning(f"Voz: {e}")
+
+async def apply_avatar_if_needed(force=False):
+    url = avatar_url()
+    if not url: return False
+    if not force and config.get("_last_avatar_url") == url: return True
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(url) as r:
+                if r.status != 200: return False
+                data = await r.read()
+        await bot.user.edit(avatar=data)
+        config["_last_avatar_url"] = url; save_config(config)
+        return True
+    except Exception as e:
+        logger.warning(f"Avatar: {e}"); return False
+
+# ===================== EVENTOS =====================
+@bot.event
+async def on_ready():
+    logger.info(f"{bemoji()} {bname()} conectado como {bot.user}")
+    try: init_db()
+    except Exception as e: logger.error(f"DB: {e}")
+    if not config.get("guild_id") and bot.guilds:
+        config["guild_id"] = bot.guilds[0].id; save_config(config)
+    try:
+        await bot.tree.sync()
+        logger.info("✅ Comandos sincronizados")
+    except Exception as e: logger.error(f"Sync: {e}")
+    await apply_avatar_if_needed()
+    await bot_join_voice()
+    await update_status()
+    for t in (task_voice, task_status, task_voice_watchdog, task_antibot_refresh, task_auto_bump):
+        if not t.is_running(): t.start()
+    try:
+        await refresh_antibot_panel()
+    except Exception:
+        pass
+
+@bot.event
+async def on_message(message: discord.Message):
+    if message.author.bot: return
+    if not message.guild: return
+
+    ab_cid = config.get("antibot_channel_id")
+    if ab_cid and message.channel.id == ab_cid:
+        await handle_antibot_punish(message)
+        return
+
+    await bot.process_commands(message)
+
+@bot.event
+async def on_member_join(member):
+    if member.bot: return
+    guild = member.guild
+
+    try:
+        await send_welcome_message(member)
+    except Exception as e:
+        logger.error(f"Erro send_welcome: {e}")
+
+    for rid in config.get("verification_unverified_role_ids", []):
+        r = guild.get_role(rid)
+        if r:
+            try: await member.add_roles(r)
+            except Exception: pass
+
+    ch_id = config.get("verification_channel_id")
+    if ch_id:
+        ch = guild.get_channel(ch_id)
+        if ch:
+            try:
+                await send_captcha_challenge(member, ch)
+            except Exception as e:
+                logger.error(f"Erro enviando desafio: {e}")
+
+    schedule_verification_kick(guild, member)
+    await update_voice_name_impl()
+    await update_status()
+
+@bot.event
+async def on_member_remove(member):
+    if member.bot: return
+    try:
+        await send_leave_message(member)
+    except Exception as e:
+        logger.error(f"Erro send_leave: {e}")
+    cancel_verification_kick(member.guild.id, member.id)
+    await update_voice_name_impl()
+    await update_status()
+
+@bot.event
+async def on_voice_state_update(member, before, after):
+    if member.bot: return
+    if before.channel is None and after.channel is not None:
+        try:
+            await send_voice_log(member, after.channel, "join")
+        except Exception as e:
+            logger.error(f"Erro voice join: {e}")
+    elif before.channel is not None and after.channel is None:
+        try:
+            await send_voice_log(member, before.channel, "leave")
+        except Exception as e:
+            logger.error(f"Erro voice leave: {e}")
+
+@bot.event
+async def on_guild_join(guild):
+    config["guild_id"] = guild.id; save_config(config)
+
+# ===================== EXECUÇÃO =====================
+if __name__ == "__main__":
+    bot.run(TOKEN)
